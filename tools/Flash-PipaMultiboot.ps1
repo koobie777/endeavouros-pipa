@@ -38,7 +38,12 @@ param(
     [string] $RootfsPartition = 'linux',
     [switch] $FlashVbmeta,
     [ValidateSet('linux', 'android')] [string] $SwitchTo,
-    [string] $Fastboot = 'fastboot'
+    [string] $Fastboot = 'fastboot',
+    # Host-side fastboot dies with std::bad_alloc building a sparse image from
+    # the ~11 GiB rootfs on Windows, whatever -S it is given, so images above
+    # this threshold are split with tools/split-sparse.py instead.
+    [int] $SplitAboveGiB = 4,
+    [int] $SparseSliceMiB = 256
 )
 
 $ErrorActionPreference = 'Stop'
@@ -215,7 +220,34 @@ Write-Host "### Flashing /boot to $BootPartition" -ForegroundColor Cyan
 Invoke-Fastboot flash $BootPartition $files.Boot | Out-Null
 
 Write-Host "### Flashing rootfs to $RootfsPartition (this is the slow one)" -ForegroundColor Cyan
-Invoke-Fastboot flash $RootfsPartition $files.Rootfs | Out-Null
+$rootfsBytes = (Get-Item -LiteralPath $files.Rootfs).Length
+if ($rootfsBytes -gt ($SplitAboveGiB * 1GB)) {
+    # fastboot cannot sparse this itself; pre-split it.
+    $splitter = Join-Path $PSScriptRoot 'split-sparse.py'
+    if (-not (Test-Path -LiteralPath $splitter)) { throw "split-sparse.py not found beside this script." }
+    $py = (Get-Command python -ErrorAction SilentlyContinue) ?? (Get-Command python3 -ErrorAction SilentlyContinue)
+    if (-not $py) { throw 'python is required to split images larger than the fastboot limit.' }
+
+    $sparseDir = Join-Path ([System.IO.Path]::GetTempPath()) ("pipa-sparse-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    Write-Host ("  image is {0:N1} GiB; pre-splitting into {1} MiB sparse slices" -f ($rootfsBytes / 1GB), $SparseSliceMiB)
+    & $py.Source -I $splitter $files.Rootfs $sparseDir --slice-mib $SparseSliceMiB | Select-Object -Last 5
+    if ($LASTEXITCODE -ne 0) { throw "split-sparse.py failed with exit code $LASTEXITCODE" }
+
+    try {
+        $chunks = Get-ChildItem (Join-Path $sparseDir 'chunk.*.simg') | Sort-Object Name
+        if (-not $chunks) { throw "splitter produced no chunks in $sparseDir" }
+        $i = 0
+        foreach ($chunk in $chunks) {
+            $i++
+            Write-Host ("  [{0}/{1}] {2}" -f $i, $chunks.Count, $chunk.Name)
+            Invoke-Fastboot flash $RootfsPartition $chunk.FullName | Out-Null
+        }
+    } finally {
+        Remove-Item -LiteralPath $sparseDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+} else {
+    Invoke-Fastboot flash $RootfsPartition $files.Rootfs | Out-Null
+}
 
 Write-Host "### Setting active slot to _$linuxSlot" -ForegroundColor Cyan
 Invoke-Fastboot set_active $linuxSlot | Out-Null
