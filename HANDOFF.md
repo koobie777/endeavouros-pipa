@@ -140,8 +140,27 @@ These each cost real debugging time. Do not rediscover them.
     belong under `[experimental]` in `.wslconfig`, not `[wsl2]`.
 
 12. **Ubuntu 24.04 dropped `libncurses5`/`libtinfo5`**, which some AOSP host
-    prebuilts still link against. `aera/setup-build-env.sh` symlinks the `.6`
-    SONAMEs to `.5`.
+    prebuilts still link against. `build-host/setup-build-env.sh` symlinks the
+    `.6` SONAMEs to `.5`.
+
+13. **`repo sync` of `aera-16.0` tries SSH and stalls.** The manifest points
+    AERA-owned projects at `git@github.com:`, and `repo init -u https://...`
+    only overrides the *manifest repo's* URL, not the per-project remotes
+    inside it. The sync floods the terminal with
+    `The authenticity of host 'github.com' can't be established` and dies with
+    `RepoUnhandledExceptionError` around a third of the way through. No key is
+    needed — the repos are public — so rewrite the URLs:
+
+    ```bash
+    git config --global --add url."https://github.com/".insteadOf "git@github.com:"
+    git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
+    ```
+
+    **`--add` is mandatory.** Both rewrites write the same config key
+    (`url.https://github.com/.insteadof`), so without it the second silently
+    replaces the first and half the URLs stay broken. `build-host/fix-remotes.sh`
+    does this and verifies three AERA repos resolve before you resync.
+    `repo sync` is resumable, so just re-run it afterwards.
 
 ---
 
