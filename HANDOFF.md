@@ -162,6 +162,43 @@ These each cost real debugging time. Do not rediscover them.
     does this and verifies three AERA repos resolve before you resync.
     `repo sync` is resumable, so just re-run it afterwards.
 
+14. **Never pipe `lunch` — this one cost two wasted builds.** It is a shell
+    function, so `lunch ... | tee` runs it in a subshell and everything it
+    exports — `TARGET_PRODUCT`, `TARGET_RELEASE`, `TARGET_BUILD_VARIANT` — is
+    discarded when that subshell exits. `lunch` itself is fine; it sets all
+    three correctly. Redirect to a file instead of piping.
+
+    The two failure modes are very different in how obvious they are:
+
+    - **No `TARGET_RELEASE`** → AOSP falls back to `trunk_staging`
+      (`release_config.mk:267`), which this manifest does not ship (it has
+      `ap2a`…`bp2a` only), and you get a loud but misleading Go panic:
+
+      ```
+      panic: Missing config trunk_staging.  Trace=[trunk_staging]
+      build/make/core/release_config.mk:142: error: release-config failed to run.
+      ```
+
+    - **No `TARGET_PRODUCT`** → falls back to `aosp_arm64` and **silently
+      builds the wrong product**, with no error whatsoever. It happily
+      compiled for ~20 minutes before the ninja filename gave it away. **If a
+      build looks suspiciously generic, check
+      `ls out/soong/build.*.ninja`** — it must say `build.twrp_pipa.ninja`,
+      not `build.aosp_arm64.ninja`.
+
+    `build-host/build-aera.sh` now parses all three out of the lunch string,
+    exports them, and hard-fails if `TARGET_PRODUCT != twrp_pipa` before
+    starting, so the silent case cannot recur.
+
+    Related: `tail -N` on that pipe withholds *all* output until the command
+    finishes, so a slow first `dumpvars` looks like a hang.
+
+15. **No `set -u` in any script that sources `envsetup.sh`.** AOSP's shell
+    functions read unset variables freely, so nounset kills `lunch` instantly
+    with `build/envsetup.sh: line 117: BUILD_VAR_CACHE_READY: unbound variable`.
+    Setting `+u` only around the `source` is not enough — `lunch` and `mka` are
+    functions *defined* there and run later.
+
 ---
 
 ## 4. NEXT TASK — build AERA Recovery
