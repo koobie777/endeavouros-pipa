@@ -95,9 +95,17 @@ These each cost real debugging time. Do not rediscover them.
    The kill loop must also spare `adbd` and its shell, or the script dies
    before it can issue the reboot.
 
-6. **PowerShell mangles inline `adb shell "su -c '...'"`.** `$p`, `$(...)` and
-   escaped quotes get eaten by PowerShell before adb sees them. Always write a
-   `.sh` file, `adb push` it, and run that.
+6. **Never pass inline shell snippets from PowerShell to another shell.**
+   `$p`, `$(...)` and escaped quotes get eaten by PowerShell before `adb` or
+   `wsl` ever sees them — and *single quotes do not reliably protect them
+   either* through this tooling. Symptoms are silent: `for p in a b c` ran with
+   `$p` empty and cheerfully reported every package missing. Always write a
+   `.sh` file and invoke the file:
+   - device: `adb push x.sh /data/local/tmp/ && adb shell "su -c 'sh /data/local/tmp/x.sh'"`
+   - WSL: `wsl -d Ubuntu-24.04 -- bash /mnt/c/path/to/x.sh`
+
+   A command line with no `$` and no nested quotes is safe inline; anything
+   else goes in a file.
 
 7. **AERA device trees use `AERA_*` names only.**
    `bootable/recovery/aera_config.mk` translates them to the backend's internal
